@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Тендерный сервис — вход</title>
+<style>
+  :root { --accent:#c41e52; --ink:#1b1b1f; --muted:#6b6b76; --line:#e3e3e8; --bg:#f5f5f7; --err:#b42318; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg);
+         font:15px/1.45 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color:var(--ink); padding:16px; }
+  form { width:100%; max-width:360px; background:#fff; border:1px solid var(--line); border-radius:14px; padding:28px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p { margin:0 0 20px; color:var(--muted); }
+  label { display:block; font-weight:600; margin-bottom:6px; }
+  input { width:100%; height:42px; border:1px solid var(--line); border-radius:8px; padding:0 12px; font:inherit; }
+  input:focus { outline:2px solid var(--accent); outline-offset:1px; border-color:transparent; }
+  button { margin-top:16px; width:100%; height:42px; border:0; border-radius:8px; background:var(--accent);
+           color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .err { color:var(--err); margin-top:12px; min-height:1.4em; }
+</style>
+</head>
+<body>
+<form id="f" autocomplete="off">
+  <h1>Тендерный сервис</h1>
+  <p>Макеты Атвинты, доступ по паролю</p>
+  <label for="pw">Пароль</label>
+  <input id="pw" type="password" autofocus required>
+  <button id="b" type="submit">Открыть</button>
+  <div class="err" id="e" role="alert"></div>
+</form>
+<script>
+const SALT = "atw-maket-94d4cc4901f8884a", ITER = 600000, BASE = "/tenderservice-site/";
+const f = document.getElementById("f"), e = document.getElementById("e"), b = document.getElementById("b");
+
+function store(key) {
+  return new Promise((ok, fail) => {
+    const r = indexedDB.open("maket-gate", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("k");
+    r.onerror = () => fail(r.error);
+    r.onsuccess = () => {
+      const t = r.result.transaction("k", "readwrite");
+      t.objectStore("k").put(key, SALT);
+      t.oncomplete = ok; t.onerror = () => fail(t.error);
+    };
+  });
+}
+
+if (!("serviceWorker" in navigator)) {
+  e.textContent = "Этот браузер или режим (например, приватное окно Firefox) не поддерживает защищённый просмотр";
+  b.disabled = true;
+} else {
+  navigator.serviceWorker.register(BASE + "sw.js", { scope: BASE });
+}
+
+f.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  e.textContent = ""; b.disabled = true; b.textContent = "Проверяю…";
+  try {
+    const raw = await crypto.subtle.importKey("raw", new TextEncoder().encode(document.getElementById("pw").value), "PBKDF2", false, ["deriveKey"]);
+    const key = await crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: new TextEncoder().encode(SALT), iterations: ITER, hash: "SHA-256" },
+      raw, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    const buf = new Uint8Array(await (await fetch(BASE + "enc/check.bin", { cache: "no-cache" })).arrayBuffer());
+    try {
+      await crypto.subtle.decrypt({ name: "AES-GCM", iv: buf.slice(0, 12) }, key, buf.slice(12));
+    } catch {
+      throw new Error("Неверный пароль");
+    }
+    await store(key);
+    const reg = await navigator.serviceWorker.ready;
+    reg.active && reg.active.postMessage("key-changed");
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((ok) => {
+        navigator.serviceWorker.addEventListener("controllerchange", ok, { once: true });
+        setTimeout(ok, 1500);
+      });
+    }
+    location.reload();
+  } catch (err) {
+    e.textContent = err.message === "Неверный пароль" ? err.message : "Не получилось открыть: " + err.message;
+    b.disabled = false; b.textContent = "Открыть";
+  }
+});
+</script>
+</body>
+</html>
